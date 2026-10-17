@@ -92,19 +92,22 @@ def reactNativeArchitectures() {
  */
 def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
-keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+def hasKeystore = keystorePropertiesFile.exists()
+if (hasKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
 
 android {
     ndkVersion rootProject.ext.ndkVersion
     compileSdkVersion rootProject.ext.compileSdkVersion
 
-    namespace "dev.nulldori.eamemu"
+    namespace "eamu.ceed.yaepe"
     defaultConfig {
-        applicationId "dev.nulldori.eamemu"
+        applicationId "eamu.ceed.yaepe"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 311
-        versionName "3.1.1"
+        versionCode 100
+        versionName "1.0.0"
     }
     splits {
         abi {
@@ -115,27 +118,46 @@ android {
         }
     }
     signingConfigs {
-        debug {
-            storeFile file(keystoreProperties['storeFile'])
-            storePassword keystoreProperties['storePassword']
-            keyAlias keystoreProperties['keyAlias']
-            keyPassword keystoreProperties['keyPassword']
-        }
-        release {
-            storeFile file(keystoreProperties['storeFile'])
-            storePassword keystoreProperties['storePassword']
-            keyAlias keystoreProperties['keyAlias']
-            keyPassword keystoreProperties['keyPassword']
+        // Only override the (default) signing configs when keystore.properties
+        // is present. Otherwise the Android plugin's built-in debug keystore is
+        // used, which is what local development relies on.
+        if (hasKeystore) {
+            debug {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+            release {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
         }
     }
     buildTypes {
         debug {
-            signingConfig signingConfigs.debug
+            if (hasKeystore) {
+                signingConfig signingConfigs.debug
+            }
         }
         release {
-            signingConfig signingConfigs.release
+            // Without keystore.properties the release APK is signed with the
+            // default debug key, so it can still be built and sideloaded with no
+            // extra setup. Provide keystore.properties to sign with a release key.
+            if (hasKeystore) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = false
         }
     }
     // applicationVariants are e.g. debug, release

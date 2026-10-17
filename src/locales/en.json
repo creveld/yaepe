@@ -7,27 +7,35 @@
   "alert": {
     "title": {
       "error": "Error",
-      "card_remove": "Remove"
+      "card_remove": "Remove",
+      "card_number_change": "Change card number"
     },
     "body": {
       "hcef_not_support": "This device does not support HCE-F. Please try again with another device.",
       "hcef_init_fail": "Failed to initialize HCE-F.\nAfter activating NFC, please restart the app\n",
-      "card_remove": "Do you want to remove the card \"{{cardName}}\"?"
+      "card_remove": "Do you want to remove the card \"{{cardName}}\"?",
+      "card_number_change": "Generate a new card number?\nYou will not be able to restore the previous number once it is saved."
     },
     "button": {
       "confirm": "Confirm",
       "remove": "Remove",
+      "change": "Change",
       "cancel": "Cancel"
     }
   },
   "main": {
-    "please_add_a_card": "Please add a card."
+    "please_add_a_card": "Please add a card.",
+    "load_failed": "Failed to load the card list."
+  },
+  "notification": {
+    "tagged_title": "Card detected",
+    "tagged_body": "The reader detected the card \"{{cardName}}\"."
   },
   "card": {
     "touch_to_activate": "Tap to activate",
     "touch_to_deactivate": "Tap to deactivate",
-    "edit": "Edit",
-    "remove": "Remove"
+    "active": "Active",
+    "edit": "Edit"
   },
   "card_edit": {
     "loading_card_number": "Loading card number...",
@@ -36,6 +44,16 @@
     "card_name": "Card Name",
     "card_number": "Card Number",
     "change_card_number": "Change card number",
-    "save": "Save"
+    "save": "Save",
+    "delete_card": "Delete card",
+    "custom_design": "Custom design",
+    "custom_design_on": "Enabled",
+    "custom_design_off": "Disabled",
+    "choose_image": "Choose Image",
+    "change_image": "Change Image",
+    "remove_image": "Remove Image"
+  },
+  "theme": {
+    "toggle": "Toggle Theme"
   }
 }

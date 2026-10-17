@@ -10,7 +10,8 @@ const getCards: () => Promise<Card[]> = async () => {
 
   try {
     return JSON.parse(cardsJson) as Card[];
-  } catch (e) {
+  } catch {
+    // Corrupted storage should not crash the app; an empty list is recoverable.
     return [];
   }
 };

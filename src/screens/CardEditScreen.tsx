@@ -1,41 +1,48 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
+  Alert,
+  NativeSyntheticEvent,
+  Platform,
   ScrollView,
   StyleSheet,
-  TextInputProps,
-  ViewStyle,
+  Switch,
+  Text,
   TextInputFocusEventData,
-  NativeSyntheticEvent,
+  TextInputProps,
   TouchableOpacityProps,
+  View,
+  ViewStyle,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Shadow } from 'react-native-shadow-2';
-import { useMutation, useQuery, useQueryClient } from 'react-query';
-import styled from 'styled-components/native';
-
-import CardConv from '../modules/CardConv';
-import { RootStackParams } from '../../App';
-import CardView from '../components/Card';
-import { addCard, updateCard } from '../data/cards';
-import { Card } from '../types';
+import { useMutation, useQueryClient } from 'react-query';
+import styled, { useTheme } from 'styled-components/native';
+import { launchImageLibrary } from 'react-native-image-picker';
 import { useTranslation } from 'react-i18next';
 
-type TextFieldProps = TextInputProps & {
-  title: string;
-  containerStyle?: ViewStyle;
-};
+import Card from '../components/Card';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { addCard, removeCard, updateCard } from '../data/cards';
+import { useCardUid } from '../hooks/useCardUid';
+import { CARD_ASPECT_RATIO } from '../components/cardLayout';
+import { SCREEN_PADDING, SPACING } from '../themes/spacing';
+import { useActiveCard } from '../state/ActiveCardContext';
+import type { Card as CardModel } from '../types';
+import type { RootStackParams } from '../navigation/types';
+
+type CardEditScreenProps = NativeStackScreenProps<
+  RootStackParams,
+  'Add' | 'Edit'
+>;
 
 const generateRandomCardNumber = () => {
-  const getRandom4Byte = () => {
-    return Math.trunc(Math.random() * 65536)
+  const randomChunk = () =>
+    Math.trunc(Math.random() * 0x10000)
       .toString(16)
       .toUpperCase()
       .padStart(4, '0');
-  };
 
-  return `02FE${getRandom4Byte()}${getRandom4Byte()}${getRandom4Byte()}`;
+  return `02FE${randomChunk()}${randomChunk()}${randomChunk()}`;
 };
 
 const Container = styled.KeyboardAvoidingView`
@@ -45,11 +52,11 @@ const Container = styled.KeyboardAvoidingView`
 
 const FieldTitle = styled(Text)<{ focused: boolean }>`
   font-size: 14px;
-  font-weight: bold;
+  font-weight: 600;
   color: ${props =>
     props.focused
       ? props.theme.colors.primary
-      : props.theme.colors.placeholder};
+      : props.theme.colors.onSurfaceVariant};
 `;
 
 const FieldBottomBorder = styled.View<{ focused: boolean }>`
@@ -57,58 +64,142 @@ const FieldBottomBorder = styled.View<{ focused: boolean }>`
   background-color: ${props =>
     props.focused
       ? props.theme.colors.primary
-      : props.theme.colors.placeholder};
+      : props.theme.colors.outlineVariant};
   height: ${props => (props.focused ? 2 : 1)}px;
 `;
 
 const StyledTextInput = styled.TextInput`
   font-size: 16px;
-  padding-top: 4px;
+  padding-top: ${SPACING.xs}px;
   color: ${props =>
     props.editable !== false
-      ? props.theme.colors.text
+      ? props.theme.colors.onSurface
       : props.theme.colors.disabled};
 `;
 
-const ButtonContainer = styled.TouchableOpacity`
-  height: 48px;
-  background-color: ${props => props.theme.colors.primary};
-  justify-content: center;
-  align-items: center;
+const ToggleTitle = styled.Text`
+  font-size: 16px;
+  font-weight: 600;
+  color: ${props => props.theme.colors.onSurface};
 `;
 
-const ButtonText = styled.Text`
+const ToggleSubtitle = styled.Text`
+  font-size: 13px;
+  margin-top: ${SPACING.xs}px;
+  color: ${props => props.theme.colors.onSurfaceVariant};
+`;
+
+const ToggleRow = styled.View`
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: ${SPACING.lg}px;
+`;
+
+const ToggleLabel = styled.View`
+  flex: 1;
+  padding-right: ${SPACING.lg}px;
+`;
+
+const Divider = styled.View`
+  height: 1px;
+  background-color: ${props => props.theme.colors.outlineVariant};
+`;
+
+const ButtonContainer = styled.TouchableOpacity<{
+  variant?: 'primary' | 'outline' | 'danger';
+}>`
+  height: 48px;
+  justify-content: center;
+  align-items: center;
+  border-radius: 24px;
+  background-color: ${props =>
+    props.variant === 'outline' || props.variant === 'danger'
+      ? 'transparent'
+      : props.theme.colors.primary};
+  border-width: ${props =>
+    props.variant === 'outline' || props.variant === 'danger' ? 1 : 0}px;
+  border-color: ${props => {
+    if (props.variant === 'outline') {
+      return props.theme.colors.outline;
+    }
+    if (props.variant === 'danger') {
+      return props.theme.colors.error;
+    }
+    return 'transparent';
+  }};
+`;
+
+const ButtonText = styled.Text<{ variant?: 'primary' | 'outline' | 'danger' }>`
   font-size: 16px;
-  color: ${props => props.theme.colors.white};
+  font-weight: 600;
+  color: ${props => {
+    if (props.variant === 'outline') {
+      return props.theme.colors.primary;
+    }
+    if (props.variant === 'danger') {
+      return props.theme.colors.error;
+    }
+    return props.theme.colors.onPrimary;
+  }};
 `;
 
 type ButtonProps = {
   text: string;
   containerStyle: ViewStyle;
+  variant?: 'primary' | 'outline' | 'danger';
 } & TouchableOpacityProps;
 
-const Button = (props: ButtonProps) => {
-  const { text, containerStyle, ...touchableProps } = props;
+const Button = ({
+  text,
+  containerStyle,
+  variant,
+  ...touchableProps
+}: ButtonProps) => {
+  const content = (
+    <ButtonContainer
+      {...touchableProps}
+      style={[
+        styles.buttonBorderRadius,
+        touchableProps.disabled ? styles.buttonDisabled : undefined,
+      ]}
+      variant={variant}
+    >
+      <ButtonText variant={variant}>{text}</ButtonText>
+    </ButtonContainer>
+  );
+
+  // Material 3 outlined buttons are flat; only filled buttons are elevated.
+  if (variant && variant !== 'primary') {
+    return <View style={containerStyle}>{content}</View>;
+  }
 
   return (
     <Shadow
-      style={styles.buttonShadowStyle}
+      style={styles.buttonShadow}
       containerStyle={containerStyle}
       distance={4}
     >
-      {/* shadow가 정상적으로 적용되지 않는 버그가 있어서 borderRadius 스타일을 분리 */}
-      <ButtonContainer {...touchableProps} style={styles.buttonBorderRadius}>
-        <ButtonText>{text}</ButtonText>
-      </ButtonContainer>
+      {content}
     </Shadow>
   );
 };
 
-const TextField = (props: TextFieldProps) => {
-  const { onFocus, onBlur, title, containerStyle, ...textInputProps } = props;
+type TextFieldProps = TextInputProps & {
+  title: string;
+  containerStyle?: ViewStyle;
+};
 
-  const [isFocused, setIsFocused] = useState<boolean>(false);
-  const onFocusCallback = useCallback(
+const TextField = ({
+  onFocus,
+  onBlur,
+  title,
+  containerStyle,
+  ...textInputProps
+}: TextFieldProps) => {
+  const [isFocused, setIsFocused] = useState(false);
+
+  const handleFocus = useCallback(
     (event: NativeSyntheticEvent<TextInputFocusEventData>) => {
       setIsFocused(true);
       onFocus?.(event);
@@ -116,7 +207,7 @@ const TextField = (props: TextFieldProps) => {
     [onFocus],
   );
 
-  const onBlurCallback = useCallback(
+  const handleBlur = useCallback(
     (event: NativeSyntheticEvent<TextInputFocusEventData>) => {
       setIsFocused(false);
       onBlur?.(event);
@@ -128,8 +219,8 @@ const TextField = (props: TextFieldProps) => {
     <View style={containerStyle}>
       <FieldTitle focused={isFocused}>{title}</FieldTitle>
       <StyledTextInput
-        onFocus={onFocusCallback}
-        onBlur={onBlurCallback}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
         {...textInputProps}
       />
       <FieldBottomBorder focused={isFocused} />
@@ -137,110 +228,203 @@ const TextField = (props: TextFieldProps) => {
   );
 };
 
-type CardAddScreenProps = NativeStackScreenProps<RootStackParams, 'Add'>;
-type CardEditScreenProps = NativeStackScreenProps<RootStackParams, 'Edit'>;
-
-const CardEditScreen = (props: CardAddScreenProps | CardEditScreenProps) => {
+const CardEditScreen = (props: CardEditScreenProps) => {
   const { t } = useTranslation();
-  const initialData = props.route.params?.card ?? undefined;
+  const theme = useTheme();
 
-  const [mode] = useState<'add' | 'edit'>(() => {
-    return initialData ? 'edit' : 'add';
-  });
+  const editParams = props.route.params;
+  const initialData = editParams?.card;
+  const isEditMode = Boolean(editParams);
 
-  const [cardName, setCardName] = useState<string>(initialData?.name ?? 'eAM');
-  const [cardNumber, setCardNumber] = useState<string>(() => {
-    return initialData?.sid ?? generateRandomCardNumber();
-  });
-  const uid = useQuery(['uid', cardNumber], () =>
-    CardConv.convertSID(cardNumber),
+  const [cardName, setCardName] = useState(initialData?.name ?? 'Yaepe');
+  const [cardNumber, setCardNumber] = useState(
+    () => initialData?.sid ?? generateRandomCardNumber(),
+  );
+  const [customImage, setCustomImage] = useState(initialData?.customImage);
+  const [showCustomDesign, setShowCustomDesign] = useState(
+    Boolean(initialData?.showCustomDesign),
   );
 
-  const styledUid = useMemo(() => {
-    if (!uid.isSuccess) {
-      return t('card_edit.loading_card_number');
-    }
+  // Card number (SID) preview: converted to a KONAMI ID by the native module.
+  const { display: styledUid, isReady: isUidReady } = useCardUid(cardNumber);
 
-    return (
-      uid.data.match(/[A-Za-z0-9]{4}/g)?.join(' - ') ??
-      t('card_edit.invalid_card_number')
+  const pickImage = useCallback(() => {
+    launchImageLibrary(
+      {
+        mediaType: 'photo',
+        includeBase64: true,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        quality: 0.8,
+      },
+      response => {
+        const base64 = response.assets?.[0]?.base64;
+        if (base64) {
+          setCustomImage(`data:image/jpeg;base64,${base64}`);
+          setShowCustomDesign(true);
+        } else if (response.errorMessage) {
+          Alert.alert(t('alert.title.error'), response.errorMessage);
+        }
+      },
     );
-  }, [t, uid]);
+  }, [t]);
 
-  const onChangeCardName = useCallback((s: string) => {
-    setCardName(s);
-  }, []);
-
-  const changeCardNumber = useCallback(() => {
-    setCardNumber(generateRandomCardNumber());
+  const removeCustomImage = useCallback(() => {
+    setCustomImage(undefined);
+    setShowCustomDesign(false);
   }, []);
 
   const queryClient = useQueryClient();
-  const addMutation = useMutation(
-    (card: Card) => {
-      return addCard(card);
-    },
+
+  const { mutate: saveCard } = useMutation(
+    (card: CardModel) =>
+      isEditMode && editParams
+        ? updateCard(editParams.index, card)
+        : addCard(card),
     {
-      onSuccess: async () => {
-        await queryClient.invalidateQueries('cards');
+      onSuccess: () => {
+        queryClient.invalidateQueries('cards');
         props.navigation.goBack();
+      },
+      onError: error => {
+        Alert.alert(
+          t('alert.title.error'),
+          error instanceof Error ? error.message : String(error),
+        );
       },
     },
   );
-  const editMutation = useMutation(
-    ({ index, card }: { index: number; card: Card }) => {
-      return updateCard(index, card);
+
+  const [isDeleteDialogVisible, setDeleteDialogVisible] = useState(false);
+  const [isChangeNumberDialogVisible, setChangeNumberDialogVisible] =
+    useState(false);
+
+  const confirmChangeCardNumber = useCallback(() => {
+    setChangeNumberDialogVisible(false);
+    setCardNumber(generateRandomCardNumber());
+  }, []);
+
+  const { deactivate } = useActiveCard();
+
+  const { mutate: deleteCard } = useMutation(
+    async ({ index, sid }: { index: number; sid: string }) => {
+      // Stop emulating the card before it disappears from storage.
+      await deactivate(sid);
+      await removeCard(index);
     },
     {
-      onSuccess: async () => {
-        await queryClient.invalidateQueries('cards');
+      onSuccess: () => {
+        queryClient.invalidateQueries('cards');
         props.navigation.goBack();
+      },
+      onError: error => {
+        Alert.alert(
+          t('alert.title.error'),
+          error instanceof Error ? error.message : String(error),
+        );
       },
     },
   );
+
+  const confirmDelete = useCallback(() => {
+    setDeleteDialogVisible(false);
+
+    if (editParams) {
+      deleteCard({ index: editParams.index, sid: editParams.card.sid });
+    }
+  }, [deleteCard, editParams]);
 
   const save = useCallback(() => {
-    const card = {
+    const card: CardModel = {
       sid: cardNumber,
-      name: cardName,
+      name: cardName.trim(),
     };
 
-    if (mode === 'add') {
-      addMutation.mutate(card);
-    } else {
-      editMutation.mutate({ index: props.route.params!.index, card: card });
+    if (showCustomDesign && customImage) {
+      card.customImage = customImage;
+      card.showCustomDesign = true;
     }
-  }, [
-    addMutation,
-    cardName,
-    cardNumber,
-    editMutation,
-    mode,
-    props.route.params,
-  ]);
+
+    saveCard(card);
+  }, [cardName, cardNumber, customImage, saveCard, showCustomDesign]);
+
+  const previewCard = useMemo<CardModel>(
+    () => ({
+      sid: cardNumber,
+      name: cardName,
+      customImage: showCustomDesign ? customImage : undefined,
+      showCustomDesign,
+    }),
+    [cardName, cardNumber, customImage, showCustomDesign],
+  );
 
   return (
-    <Container>
+    <Container behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
         contentContainerStyle={styles.scrollView}
         keyboardShouldPersistTaps="handled"
       >
-        <CardView
-          card={{
-            sid: cardNumber,
-            name: cardName,
-          }}
-          mainText={t('card_edit.card_preview')}
-          index={0 /* dummy index */}
-          disabledMainButton={true}
-          hideBottomMenu={true}
-        />
+        <View style={styles.previewContainer}>
+          <Card card={previewCard} hint={t('card_edit.card_preview')} />
+        </View>
 
-        <View style={[styles.fieldItemContainer]}>
+        <ToggleRow>
+          <ToggleLabel>
+            <ToggleTitle>{t('card_edit.custom_design')}</ToggleTitle>
+            <ToggleSubtitle>
+              {t(
+                showCustomDesign
+                  ? 'card_edit.custom_design_on'
+                  : 'card_edit.custom_design_off',
+              )}
+            </ToggleSubtitle>
+          </ToggleLabel>
+          <Switch
+            value={showCustomDesign}
+            onValueChange={setShowCustomDesign}
+            disabled={!customImage}
+            style={customImage ? undefined : styles.disabledControl}
+            trackColor={{
+              false: theme.colors.outlineVariant,
+              true: theme.colors.primary,
+            }}
+            thumbColor={
+              showCustomDesign ? theme.colors.onPrimary : theme.colors.outline
+            }
+            ios_backgroundColor={theme.colors.outlineVariant}
+          />
+        </ToggleRow>
+
+        <View style={styles.customControlRow}>
+          {customImage ? (
+            <View style={styles.buttonRow}>
+              <Button
+                variant="outline"
+                onPress={pickImage}
+                containerStyle={styles.flexButton}
+                text={t('card_edit.change_image')}
+              />
+              <Button
+                variant="outline"
+                onPress={removeCustomImage}
+                containerStyle={styles.flexButton}
+                text={t('card_edit.remove_image')}
+              />
+            </View>
+          ) : (
+            <Button
+              onPress={pickImage}
+              containerStyle={styles.fullWidth}
+              text={t('card_edit.choose_image')}
+            />
+          )}
+        </View>
+
+        <View style={styles.fieldItemContainer}>
           <TextField
             title={t('card_edit.card_name')}
             value={cardName}
-            onChangeText={onChangeCardName}
+            onChangeText={setCardName}
           />
         </View>
 
@@ -252,43 +436,104 @@ const CardEditScreen = (props: CardAddScreenProps | CardEditScreenProps) => {
           />
           <Button
             containerStyle={styles.cardNumberChangeButton}
-            onPress={changeCardNumber}
-            disabled={!uid.isSuccess}
+            onPress={() => setChangeNumberDialogVisible(true)}
+            disabled={!isUidReady}
             text={t('card_edit.change_card_number')}
           />
         </View>
 
+        <Divider />
+
         <Button
           onPress={save}
+          disabled={!cardName.trim()}
           containerStyle={styles.saveButton}
           text={t('card_edit.save')}
         />
+
+        {isEditMode ? (
+          <Button
+            variant="danger"
+            onPress={() => setDeleteDialogVisible(true)}
+            containerStyle={styles.deleteButton}
+            text={t('card_edit.delete_card')}
+          />
+        ) : null}
       </ScrollView>
+
+      {isEditMode ? (
+        <ConfirmDialog
+          visible={isDeleteDialogVisible}
+          title={t('alert.title.card_remove')}
+          message={t('alert.body.card_remove', {
+            cardName: initialData?.name ?? '',
+          })}
+          confirmLabel={t('alert.button.remove')}
+          cancelLabel={t('alert.button.cancel')}
+          destructive
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteDialogVisible(false)}
+        />
+      ) : null}
+
+      <ConfirmDialog
+        visible={isChangeNumberDialogVisible}
+        title={t('alert.title.card_number_change')}
+        message={t('alert.body.card_number_change')}
+        confirmLabel={t('alert.button.change')}
+        cancelLabel={t('alert.button.cancel')}
+        onConfirm={confirmChangeCardNumber}
+        onCancel={() => setChangeNumberDialogVisible(false)}
+      />
     </Container>
   );
 };
 
 const styles = StyleSheet.create({
-  screen: {
+  scrollView: {
+    padding: SCREEN_PADDING,
+  },
+  previewContainer: {
+    width: '100%',
+    aspectRatio: CARD_ASPECT_RATIO,
+    marginBottom: SPACING.xxl,
+  },
+  customControlRow: {
+    marginBottom: SPACING.xxl,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: SPACING.md,
+  },
+  flexButton: {
     flex: 1,
   },
-  scrollView: {
-    padding: 16,
+  fullWidth: {
+    width: '100%',
+  },
+  disabledControl: {
+    opacity: 0.5,
   },
   fieldItemContainer: {
-    paddingTop: 32,
+    marginBottom: SPACING.xxl,
   },
-  buttonShadowStyle: {
+  buttonShadow: {
     width: '100%',
   },
   buttonBorderRadius: {
-    borderRadius: 8,
+    borderRadius: 24,
+  },
+  buttonDisabled: {
+    opacity: 0.4,
   },
   saveButton: {
-    marginTop: 32,
+    marginTop: SPACING.xl,
+  },
+  deleteButton: {
+    marginTop: SPACING.md,
   },
   cardNumberChangeButton: {
-    marginTop: 16,
+    marginTop: SPACING.lg,
   },
 });
 

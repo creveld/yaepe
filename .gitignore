@@ -55,6 +55,10 @@ yarn-error.log
 # Bundle artifact
 *.jsbundle
 
+# Android build outputs bundled into assets by the react-native gradle plugin
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/assets/drawable-*/
+
 # CocoaPods
 /ios/Pods/
 /vendor/bundle/

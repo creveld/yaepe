@@ -1,239 +1,305 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
-  View,
-  Alert,
-  StyleSheet,
-  FlatList,
   ActivityIndicator,
+  Alert,
+  Animated,
+  Easing,
+  Image,
+  StyleSheet,
+  Vibration,
+  View,
 } from 'react-native';
-import { useMutation, useQuery, useQueryClient } from 'react-query';
+import { useQuery } from 'react-query';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import FontAwesome5 from 'react-native-vector-icons/FontAwesome5';
-import { Shadow } from 'react-native-shadow-2';
-import {
-  NativeStackNavigationProp,
-  NativeStackScreenProps,
-} from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
 import styled from 'styled-components/native';
+import { useTranslation } from 'react-i18next';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import Hcef from '../modules/Hcef';
-import CardView from '../components/Card';
-import { Card } from '../types';
-import { getCards, removeCard } from '../data/cards';
-import { RootStackParams } from '../../App';
-import { useTranslation } from 'react-i18next';
+import CardCarousel from '../components/CardCarousel';
+import { getCards } from '../data/cards';
+import { ensureNotificationPermission } from '../modules/notifications';
+import { useActiveCard } from '../state/ActiveCardContext';
+import { SCREEN_PADDING, SPACING } from '../themes/spacing';
+import type { RootStackParams } from '../navigation/types';
 
-const Container = styled(View)`
+/** Diameter of the circular "add card" button. */
+const FAB_SIZE = 56;
+
+/** Blur applied to the active card's artwork behind the carousel. */
+const BACKDROP_BLUR = 25;
+/** Opacity of the blurred artwork itself. */
+const BACKDROP_IMAGE_OPACITY = 0.5;
+/** Opacity of the theme-coloured layer that mutes the artwork underneath. */
+const BACKDROP_DIM_OPACITY = 0.5;
+/** How long the backdrop takes to fade in and out (milliseconds). */
+const BACKDROP_FADE_MS = 700;
+/** Length of the confirmation buzz when a card is activated (milliseconds). */
+const ACTIVATION_VIBRATION = 25;
+
+const Container = styled.View`
   flex: 1;
   background-color: ${props => props.theme.colors.background};
-  justify-content: center;
-  align-items: center;
 `;
 
-const PlaceholderText = styled.Text`
-  font-size: 14px;
-  color: ${props => props.theme.colors.placeholder};
+const Centered = styled.View`
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  padding-horizontal: ${SCREEN_PADDING}px;
+`;
+
+const Message = styled.Text`
+  font-size: 16px;
+  font-weight: 500;
+  text-align: center;
+  color: ${props => props.theme.colors.onSurfaceVariant};
+`;
+
+/**
+ * Sits on top of the blurred artwork and pulls it back towards the background
+ * colour, so an activated card stays a hint rather than a second picture.
+ */
+const BackdropDim = styled.View`
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: ${props => props.theme.colors.background};
+  opacity: ${BACKDROP_DIM_OPACITY};
 `;
 
 const AddButton = styled.TouchableOpacity`
-  background-color: ${props => props.theme.colors.card};
+  position: absolute;
+  right: ${SCREEN_PADDING}px;
+  width: ${FAB_SIZE}px;
+  height: ${FAB_SIZE}px;
+  border-radius: ${FAB_SIZE / 2}px;
   justify-content: center;
   align-items: center;
-  width: 64px;
-  height: 64px;
+  background-color: ${props => props.theme.colors.primary};
+  elevation: 6;
+  shadow-color: #000;
+  shadow-offset: 0px 3px;
+  shadow-opacity: 0.3;
+  shadow-radius: 6px;
 `;
 
 const AddButtonIcon = styled(FontAwesome5).attrs({ name: 'plus' })`
-  color: ${props => props.theme.colors.primary};
+  color: ${props => props.theme.colors.onPrimary};
   font-size: 24px;
 `;
 
-const ListSeparator = styled.View`
-  height: 16px;
-`;
+type MainScreenProps = NativeStackScreenProps<RootStackParams, 'Main'>;
 
-const CardList = (props: { cards: Card[] }) => {
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParams>>();
-  const cards = props.cards;
-  const [enabledCardIndex, setEnabledCardIndex] = useState<number | null>(null);
-
+const MainScreen = ({ navigation }: MainScreenProps) => {
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
 
-  const toggleHcef = useCallback(
-    async (index: number) => {
-      const card = cards[index];
-      if (enabledCardIndex === index) {
-        // disable
-        await Hcef.disableService();
-        setEnabledCardIndex(null);
-      } else {
-        await Hcef.enableService(card.sid);
-        setEnabledCardIndex(index);
-      }
-    },
-    [cards, enabledCardIndex],
+  const fabStyle = useMemo(
+    () => ({ bottom: insets.bottom + SCREEN_PADDING }),
+    [insets.bottom],
   );
 
-  const queryClient = useQueryClient();
-  const deleteMutation = useMutation((index: number) => removeCard(index), {
-    onSuccess: () => {
-      queryClient.invalidateQueries('cards');
-    },
-  });
+  const [centerIndex, setCenterIndex] = useState(0);
+  const { activeSid, toggleActive } = useActiveCard();
 
-  const onDelete = useCallback(
-    (index: number) => {
+  const hasCheckedHcef = useRef(false);
+
+  // Verify HCE-F support/enablement once, as early as possible.
+  useEffect(() => {
+    if (hasCheckedHcef.current) {
+      return;
+    }
+    hasCheckedHcef.current = true;
+
+    if (!Hcef.support) {
+      Alert.alert(t('alert.title.error'), t('alert.body.hcef_not_support'), [
+        { text: t('alert.button.confirm') },
+      ]);
+    } else if (!Hcef.enabled) {
+      Alert.alert(t('alert.title.error'), t('alert.body.hcef_init_fail'), [
+        { text: t('alert.button.confirm') },
+      ]);
+    }
+  }, [t]);
+
+  const cardsQuery = useQuery('cards', getCards);
+  const cards = useMemo(() => cardsQuery.data ?? [], [cardsQuery.data]);
+
+  // Deleting a card can leave the centred index pointing past the end of the
+  // list; the carousel can only highlight a card that still exists.
+  useEffect(() => {
+    setCenterIndex(previous =>
+      previous > cards.length - 1 ? Math.max(0, cards.length - 1) : previous,
+    );
+  }, [cards.length]);
+
+  const activateCard = useCallback(
+    async (index: number) => {
       const card = cards[index];
+      if (!card) {
+        return;
+      }
 
-      Alert.alert(
-        t('alert.title.card_remove'),
-        t('alert.body.card_remove', { cardName: card.name }),
-        [
-          {
-            text: t('alert.button.confirm'),
-            onPress: () => {
-              deleteMutation.mutate(index);
-            },
-          },
-          { text: t('alert.button.cancel') },
-        ],
-      );
+      const isActivating = activeSid !== card.sid;
+
+      try {
+        if (isActivating) {
+          // Ask early, but never hold up the activation on the system dialog.
+          ensureNotificationPermission();
+        }
+
+        await toggleActive(card.sid, card.name);
+
+        if (isActivating) {
+          Vibration.vibrate(ACTIVATION_VIBRATION);
+        }
+      } catch (error) {
+        Alert.alert(
+          t('alert.title.error'),
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     },
-    [t, cards, deleteMutation],
+    [activeSid, cards, t, toggleActive],
   );
 
   const onEdit = useCallback(
     (index: number) => {
       const card = cards[index];
-      navigation.navigate('Edit', {
-        index,
-        card,
-      });
+      if (!card) {
+        return;
+      }
+      navigation.navigate('Edit', { index, card });
     },
     [cards, navigation],
   );
-
-  if (cards.length > 0) {
-    return (
-      <FlatList
-        style={styles.cardList}
-        data={cards}
-        contentContainerStyle={styles.cardListContainer}
-        renderItem={card => (
-          <CardView
-            card={card.item}
-            index={card.index}
-            onPress={toggleHcef}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            mainText={
-              card.index === enabledCardIndex
-                ? t('card.touch_to_deactivate')
-                : t('card.touch_to_activate')
-            }
-          />
-        )}
-        ItemSeparatorComponent={ListSeparator}
-        ListHeaderComponent={ListSeparator}
-        ListFooterComponent={ListSeparator}
-      />
-    );
-  } else {
-    return (
-      <View style={styles.placeholderContainer}>
-        <PlaceholderText>{t('main.please_add_a_card')}</PlaceholderText>
-      </View>
-    );
-  }
-};
-
-type MainScreenProps = NativeStackScreenProps<RootStackParams, 'Main'>;
-
-const MainScreen = (props: MainScreenProps) => {
-  const { navigation } = props;
-
-  // check native hcef module
-  useEffect(() => {
-    if (!Hcef.support) {
-      Alert.alert(
-        '오류',
-        '이 기기는 HCE-F를 지원하지 않습니다. 다른 기기로 다시 시도해 주세요.',
-        [
-          {
-            text: '확인',
-          },
-        ],
-      );
-
-      return;
-    }
-
-    if (!Hcef.enabled) {
-      Alert.alert(
-        '오류',
-        'HCE-F 초기 설정에 실패했습니다.\n앱을 종료한 뒤, NFC를 활성화하고 다시 실행해 주세요.',
-        [
-          {
-            text: '확인',
-          },
-        ],
-      );
-
-      return;
-    }
-  }, []);
-
-  // load card list from async storage
-  const cardsQuery = useQuery<Card[]>('cards', getCards);
 
   const goToAdd = useCallback(() => {
     navigation.navigate('Add');
   }, [navigation]);
 
+  // The artwork of the active card also fills the screen behind the carousel,
+  // heavily blurred, so an activated card is recognisable at a glance.
+  const activeBackdropUri = useMemo(() => {
+    const card = cards.find(item => item.sid === activeSid);
+
+    return card?.showCustomDesign ? card.customImage : undefined;
+  }, [activeSid, cards]);
+
+  // Kept mounted while fading out, so the backdrop can also disappear softly.
+  const [backdropUri, setBackdropUri] = useState(activeBackdropUri);
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (activeBackdropUri) {
+      setBackdropUri(activeBackdropUri);
+    }
+
+    const animation = Animated.timing(backdropOpacity, {
+      toValue: activeBackdropUri ? 1 : 0,
+      duration: BACKDROP_FADE_MS,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true,
+    });
+
+    animation.start(({ finished }) => {
+      if (finished && !activeBackdropUri) {
+        setBackdropUri(undefined);
+      }
+    });
+
+    return () => animation.stop();
+  }, [activeBackdropUri, backdropOpacity]);
+
+  if (cardsQuery.isLoading) {
+    return (
+      <Container>
+        <Centered>
+          <ActivityIndicator size="large" />
+        </Centered>
+      </Container>
+    );
+  }
+
+  if (cardsQuery.isError) {
+    return (
+      <Container>
+        <Centered>
+          <Message>{t('main.load_failed')}</Message>
+        </Centered>
+      </Container>
+    );
+  }
+
+  if (cards.length === 0) {
+    return (
+      <Container>
+        <Centered>
+          <Message>{t('main.please_add_a_card')}</Message>
+        </Centered>
+        <AddButton onPress={goToAdd} style={fabStyle}>
+          <AddButtonIcon />
+        </AddButton>
+      </Container>
+    );
+  }
+
   return (
     <Container>
-      {cardsQuery.isSuccess ? (
-        <>
-          <CardList cards={cardsQuery.data} />
+      {backdropUri ? (
+        <Animated.View
+          style={[styles.backdrop, { opacity: backdropOpacity }]}
+          pointerEvents="none"
+        >
+          <Image
+            source={{ uri: backdropUri }}
+            style={styles.backdropImage}
+            blurRadius={BACKDROP_BLUR}
+            resizeMode="cover"
+          />
+          <BackdropDim />
+        </Animated.View>
+      ) : null}
 
-          <Shadow
-            containerStyle={styles.addButtonContainer}
-            distance={4}
-            offset={[0, 2]}
-          >
-            {/* shadow가 정상적으로 적용되지 않는 버그가 있어서 borderRadius 스타일을 분리 */}
-            <AddButton onPress={goToAdd} style={styles.addButtonRadius}>
-              <AddButtonIcon />
-            </AddButton>
-          </Shadow>
-        </>
-      ) : (
-        <View>
-          <ActivityIndicator size={'large'} />
-        </View>
-      )}
+      <View style={styles.carouselArea}>
+        <CardCarousel
+          cards={cards}
+          centerIndex={centerIndex}
+          setCenterIndex={setCenterIndex}
+          onPress={activateCard}
+          onEdit={onEdit}
+          activeSid={activeSid}
+        />
+      </View>
+
+      <AddButton onPress={goToAdd} style={fabStyle}>
+        <AddButtonIcon />
+      </AddButton>
     </Container>
   );
 };
 
 const styles = StyleSheet.create({
-  cardList: {
-    alignSelf: 'stretch',
+  carouselArea: {
+    flex: 1,
+    paddingVertical: SPACING.xl,
   },
-  cardListContainer: {
-    paddingHorizontal: 16,
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
   },
-  placeholderContainer: {
-    alignItems: 'center',
-  },
-  addButtonContainer: {
-    position: 'absolute',
-    right: 24,
-    bottom: 24,
-  },
-  addButtonRadius: {
-    borderRadius: 64,
+  backdropImage: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: BACKDROP_IMAGE_OPACITY,
   },
 });
 

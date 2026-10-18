@@ -1,4 +1,4 @@
-# Yaepe
+# YaEPe
 
 HCE-F를 이용한 안드로이드용 e-amusement pass 에뮬레이션 앱입니다.
 실제 카드 없이 스마트폰을 아케이드 기기에 태그하여 카드처럼 사용할 수 있습니다.
@@ -75,7 +75,7 @@ npm run lint
 npm test
 ```
 
-### 릴리스 빌드 (컴퓨터 없이 쓰는 APK)
+### 릴리스 빌드
 
 ```bash
 npm run android:release         # cd android && ./gradlew assembleRelease
